@@ -45,9 +45,16 @@ BLOCK_QUANT = 128   # FP8 quantization block size; K-tile must be a multiple
 # Kernel: fused GEMM1 Gate + Up + SwiGLU for one expert
 #
 # Computes:
-#   gate[Tk, I_DIM] = hidden[tokens, :] @ W_gate[expert, :, :]^T  (FP8)
-#   up  [Tk, I_DIM] = hidden[tokens, :] @ W_up  [expert, :, :]^T  (FP8)
-#   out [Tk, I_DIM] = silu(up) * gate                              (BF16)
+
+#   W_gate: [E_local, H_DIM, I_DIM] FP8
+#   W_up: [E_local, H_DIM, I_DIM] FP8
+#   gate: [Tk, I_DIM] BF16
+#   up: [Tk, I_DIM] BF16
+#   out: [Tk, I_DIM] BF16
+#   Tk: int, number of tokens assigned to this expert
+#   gate[Tk, I_DIM] = hidden[tokens, :] @ W_gate[expert, :, :]^T
+#   up  [Tk, I_DIM] = hidden[tokens, :] @ W_up  [expert, :, :]^T
+#   out [Tk, I_DIM] = silu(up) * gate
 #
 # Grid decomposition:
 #   pid_m = token tile  (Tk / BLOCK_M tiles along token dimension)
@@ -332,6 +339,7 @@ def routing_topk_kernel(
     In CuTe/CUDA we wrote the warp reduction manually (xor shuffles);
     here tl.max + tl.argmax express the same operation at a higher level.
     """
+
     token = tl.program_id(0)
     if token >= T:
         return
