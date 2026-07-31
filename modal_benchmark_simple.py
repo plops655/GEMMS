@@ -25,16 +25,9 @@ from pathlib import Path
 
 image = (
     modal.Image
-    .from_registry("nvidia/cuda:12.4.1-runtime-ubuntu22.04")
+    .from_registry("nvcr.io/nvidia/pytorch:24.07-py3")
     .pip_install(
-        "torch",
         "triton>=2.1.0",
-    )
-    .apt_install(
-        "nsight-systems-cli-remote",
-        "curl",
-        "wget",
-        "git",
     )
 )
 

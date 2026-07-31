@@ -29,19 +29,12 @@ import sys
 # Modal Setup
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Create image with Triton, CUDA, and NVIDIA tools
+# Use NVIDIA NGC container with nsys pre-installed
 image = (
     modal.Image
-    .from_registry("nvidia/cuda:12.4.1-runtime-ubuntu22.04")
+    .from_registry("nvcr.io/nvidia/pytorch:24.07-py3")  # Has nsys + CUDA + Python
     .pip_install(
-        "torch>=2.0",
         "triton>=2.1.0",
-    )
-    .apt_install(
-        "nsight-systems-cli-remote",
-        "curl",
-        "wget",
-        "git",
     )
 )
 
@@ -92,9 +85,9 @@ def run_benchmark_with_profiling():
     print(f"\n🔍 Profiling Tools:")
     result = subprocess.run(["which", "nsys"], capture_output=True, text=True)
     if result.returncode == 0:
-        print(f"  nsys: {result.stdout.strip()}")
+        print(f"  ✓ nsys: {result.stdout.strip()}")
     else:
-        print("  ⚠️  nsys might not be in PATH, attempting to run anyway...")
+        raise RuntimeError("nsys not found in container")
 
     # Import benchmark functions
     print(f"\n📦 Importing benchmark module...")
@@ -155,6 +148,15 @@ def run_benchmark_with_profiling():
         json.dump([r.to_dict() for r in all_results], f, indent=2)
     print(f"\n✓ Timing results saved: {results_file}")
 
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 3: Generate summaries
+    # ────────────────────────────────────────────────────────────────────────
+
+    print("\n" + "=" * 90)
+    print("STEP 3: GENERATING SUMMARIES")
+    print("=" * 90)
+
     # ────────────────────────────────────────────────────────────────────────
     # Step 2: Profile each kernel with nsys
     # ────────────────────────────────────────────────────────────────────────
@@ -170,80 +172,58 @@ def run_benchmark_with_profiling():
         ("gemm2", benchmark_gemm2),
     ]
 
-    profile_configs = {}
-
     for bench_name, bench_func in benchmarks:
         print(f"\n🔴 Profiling: {bench_name}")
-        print(f"   Creating wrapper script...")
 
-        # Create a Python script that runs just this benchmark
-        wrapper_script = results_dir / f"_profile_{bench_name}.py"
+        # Create wrapper script
+        wrapper_script = results_dir / f"_bench_{bench_name}.py"
         with open(wrapper_script, "w") as f:
             f.write(f"""
-import sys
-sys.path.insert(0, "/results")
-
 import torch
 from benchmark_moe_triton import BenchmarkConfig, {bench_func.__name__}
 
 config = BenchmarkConfig(
-    num_tokens_list=[100, 1000],  # Smaller set for profiling
+    num_tokens_list=[100, 1000],
     num_experts=32,
     num_repeats=2,
     warmup_iters=1,
     device=torch.device("cuda"),
 )
 
-print(f"Running {bench_func.__name__}...")
-results = {bench_func.__name__}(config)
-print(f"Done.")
+{bench_func.__name__}(config)
 """)
 
-        # Run under nsys
+        # Run nsys
         trace_file = results_dir / f"moe_triton_{bench_name}.nsys-rep"
-        print(f"   Running nsys profiler...")
 
         cmd = [
             "nsys",
             "profile",
-            "--trace=cuda,nvtx,osrt",
+            "--trace=cuda,nvtx",
             f"--output={trace_file}",
             "--force-overwrite=true",
-            "-c cudaProfilerApi",
             sys.executable,
             str(wrapper_script),
         ]
 
-        print(f"   Command: {' '.join(cmd)}")
+        print(f"   Running: nsys profile ...")
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=results_dir)
 
-        if result.returncode == 0:
-            trace_size_mb = trace_file.stat().st_size / (1024 * 1024)
-            print(f"   ✓ Trace saved: {trace_file.name} ({trace_size_mb:.1f} MB)")
-            profile_configs[bench_name] = str(trace_file)
+        if result.returncode == 0 and trace_file.exists():
+            size_mb = trace_file.stat().st_size / (1024 * 1024)
+            print(f"   ✓ {trace_file.name} ({size_mb:.1f} MB)")
         else:
-            print(f"   ✗ Profiling failed")
-            print(f"   stdout: {result.stdout}")
-            print(f"   stderr: {result.stderr}")
+            print(f"   ✗ Failed: {result.stderr}")
 
-    # ────────────────────────────────────────────────────────────────────────
-    # Step 3: Generate summaries
-    # ────────────────────────────────────────────────────────────────────────
-
-    print("\n" + "=" * 90)
-    print("STEP 3: GENERATING SUMMARIES")
-    print("=" * 90)
-
-    # Save profiling summary
-    profile_summary = {
+    # Save summary
+    summary = {
         "status": "complete",
         "gpu": torch.cuda.get_device_name(0),
-        "profiles": profile_configs,
         "timing_results": results_file.name,
     }
-    summary_file = results_dir / "profile_summary.json"
+    summary_file = results_dir / "benchmark_summary.json"
     with open(summary_file, "w") as f:
-        json.dump(profile_summary, f, indent=2)
+        json.dump(summary, f, indent=2)
     print(f"✓ Summary: {summary_file}")
 
     # ────────────────────────────────────────────────────────────────────────
