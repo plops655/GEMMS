@@ -350,14 +350,61 @@ def routing_topk_kernel(
     sig    = 1.0 / (1.0 + tl.exp(-logits))
     s_wb   = sig + bias
 
-    # Group scores: top1 per group of GROUP_SIZE experts (simplified)
+    # Group scores: top1 per group of GROUP_SIZE experts
     s_wb_2d = tl.reshape(s_wb, (N_GROUP, GROUP_SIZE))
     group_scores = tl.max(s_wb_2d, axis=1)  # [N_GROUP=8]
 
-    # Top-TOPK_GROUP groups by score
-    # This is a simplified placeholder — full routing logic omitted for brevity
-    # In production: use argmax in loop to select top TOPK_GROUP groups
-    # Then select top TOP_K experts within those groups
+    # Top-TOPK_GROUP groups by score (manual selection, no tensor slicing)
+    # Store top TOPK_GROUP indices
+    topk_group_idx = tl.zeros(TOPK_GROUP, dtype=tl.int32)
+    topk_group_val = tl.full(TOPK_GROUP, tl.finfo(tl.float32).min, dtype=tl.float32)
+
+    for g in tl.static_range(N_GROUP):
+        score = group_scores[g]
+        # Check if this score is in top TOPK_GROUP
+        for k in tl.static_range(TOPK_GROUP):
+            if score > topk_group_val[k]:
+                # Shift and insert
+                for j in tl.static_range(TOPK_GROUP - 1, k, -1):
+                    topk_group_val[j] = topk_group_val[j - 1]
+                    topk_group_idx[j] = topk_group_idx[j - 1]
+                topk_group_val[k] = score
+                topk_group_idx[k] = g
+                break
+
+    # Build group mask
+    group_mask = tl.zeros(N_GROUP, dtype=tl.float32)
+    for k in tl.static_range(TOPK_GROUP):
+        group_mask[topk_group_idx[k]] = 1.0
+
+    # Expand to expert mask
+    score_mask = tl.zeros(E, dtype=tl.float32)
+    for g in tl.static_range(N_GROUP):
+        if group_mask[g] > 0:
+            for e in tl.static_range(GROUP_SIZE):
+                score_mask[g * GROUP_SIZE + e] = 1.0
+
+    # Mask and select top-k experts
+    scores_pruned = tl.where(score_mask > 0, s_wb, tl.finfo(tl.float32).min)
+
+    # Get top TOP_K experts (simplified - just store indices)
+    topk_idx = tl.zeros(TOP_K, dtype=tl.int32)
+    topk_val = tl.full(TOP_K, tl.finfo(tl.float32).min, dtype=tl.float32)
+
+    for e in tl.static_range(E):
+        score = scores_pruned[e]
+        for k in tl.static_range(TOP_K):
+            if score > topk_val[k]:
+                for j in tl.static_range(TOP_K - 1, k, -1):
+                    topk_val[j] = topk_val[j - 1]
+                    topk_idx[j] = topk_idx[j - 1]
+                topk_val[k] = score
+                topk_idx[k] = e
+                break
+
+    # Store results (simplified - just store first token's results)
+    for k in tl.static_range(TOP_K):
+        tl.store(topk_idx_ptr + token * TOP_K + k, topk_idx[k])
 
 
 @triton.jit
