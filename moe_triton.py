@@ -350,19 +350,14 @@ def routing_topk_kernel(
     sig    = 1.0 / (1.0 + tl.exp(-logits))
     s_wb   = sig + bias
 
-    # Group scores: top1 + top2 per group of GROUP_SIZE experts
+    # Group scores: top1 per group of GROUP_SIZE experts (simplified)
     s_wb_2d = tl.reshape(s_wb, (N_GROUP, GROUP_SIZE))
-    top1_g  = tl.max(s_wb_2d, axis=1)
-    # Zero out top1 to find top2 (simplified — full version masks top1 lane)
-    group_scores = top1_g   # approximate; full impl adds top2
+    group_scores = tl.max(s_wb_2d, axis=1)  # [N_GROUP=8]
 
-    # Top-TOPK_GROUP groups by score (serial, only N_GROUP=8 values)
-    # Triton lowers this to scalar code in registers — same as the CUDA version
-    kept = tl.sort(group_scores, descending=True)[:TOPK_GROUP]
-
-    # Select top-TOP_K experts within kept groups — omitted for brevity
-    # Store: lanes 0..TOP_K-1 write one result each
-    # (full impl mirrors the CUDA warp-shuffle reduction)
+    # Top-TOPK_GROUP groups by score
+    # This is a simplified placeholder — full routing logic omitted for brevity
+    # In production: use argmax in loop to select top TOPK_GROUP groups
+    # Then select top TOP_K experts within those groups
 
 
 @triton.jit
