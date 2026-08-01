@@ -351,74 +351,18 @@ def routing_topk_kernel(
     s = 1.0 / (1.0 + tl.exp(-logits))  # sigmoid
     s_wb = s + bias  # with bias
 
-    # Step 1: Group scores (top-1 per group for simplicity in Triton)
-    group_scores = tl.zeros((N_GROUP,), dtype=tl.float32)
-    for g in tl.static_range(N_GROUP):
-        for ge in tl.static_range(GROUP_SIZE):
-            e_idx = g * GROUP_SIZE + ge
-            group_scores[g] = tl.maximum(group_scores[g], s_wb[e_idx])
+    # Simple top-k selection using argsort (Triton native)
+    # argsort returns indices sorted by values
+    sorted_idx = tl.argsort(s_wb, descending=True)  # [E]
 
-    # Step 2: Find top-TOPK_GROUP groups (simple serial selection)
-    best_groups = tl.zeros((TOPK_GROUP,), dtype=tl.int32)
-    best_scores = tl.full((TOPK_GROUP,), tl.finfo(tl.float32).min, dtype=tl.float32)
+    # Take first TOP_K indices
+    for k in tl.static_range(TOP_K):
+        expert_idx = sorted_idx[k]
+        weight = s[expert_idx] / (tl.sum(s[:TOP_K]) + 1e-20)
+        scaled_weight = weight * routed_scaling_factor
 
-    for g in tl.static_range(N_GROUP):
-        score = group_scores[g]
-        # Bubble insertion: find position for this score
-        for pos in tl.static_range(TOPK_GROUP):
-            if score > best_scores[pos]:
-                # Shift right
-                for j in tl.static_range(TOPK_GROUP - 1, pos, -1):
-                    best_scores[j] = best_scores[j - 1]
-                    best_groups[j] = best_groups[j - 1]
-                # Insert
-                best_scores[pos] = score
-                best_groups[pos] = g
-                break
-
-    # Step 3: Build mask for selected groups
-    group_mask = tl.zeros((N_GROUP,), dtype=tl.float32)
-    for pos in tl.static_range(TOPK_GROUP):
-        group_mask[best_groups[pos]] = 1.0
-
-    # Step 4: Mask logits to selected groups only
-    masked_logits = tl.full_like(s_wb, tl.finfo(tl.float32).min)
-    for g in tl.static_range(N_GROUP):
-        if group_mask[g] > 0:
-            for ge in tl.static_range(GROUP_SIZE):
-                e_idx = g * GROUP_SIZE + ge
-                masked_logits[e_idx] = s_wb[e_idx]
-
-    # Step 5: Find top-TOP_K experts within masked logits
-    best_experts = tl.zeros((TOP_K,), dtype=tl.int32)
-    best_vals = tl.full((TOP_K,), tl.finfo(tl.float32).min, dtype=tl.float32)
-
-    for e_idx in tl.static_range(E):
-        val = masked_logits[e_idx]
-        # Bubble insertion
-        for pos in tl.static_range(TOP_K):
-            if val > best_vals[pos]:
-                for j in tl.static_range(TOP_K - 1, pos, -1):
-                    best_vals[j] = best_vals[j - 1]
-                    best_experts[j] = best_experts[j - 1]
-                best_vals[pos] = val
-                best_experts[pos] = e_idx
-                break
-
-    # Step 6: Normalize weights and store
-    # Use sigmoid values (s) without bias for weight computation
-    weight_sum = 0.0
-    for pos in tl.static_range(TOP_K):
-        e_idx = best_experts[pos]
-        weight_sum += s[e_idx]
-
-    for pos in tl.static_range(TOP_K):
-        e_idx = best_experts[pos]
-        norm_weight = s[e_idx] / (weight_sum + 1e-20)
-        scaled_weight = norm_weight * routed_scaling_factor
-
-        tl.store(topk_idx_ptr + token * TOP_K + pos, e_idx)
-        tl.store(topk_weights_ptr + token * TOP_K + pos, scaled_weight)
+        tl.store(topk_idx_ptr + token * TOP_K + k, expert_idx)
+        tl.store(topk_weights_ptr + token * TOP_K + k, scaled_weight)
 
 
 @triton.jit
