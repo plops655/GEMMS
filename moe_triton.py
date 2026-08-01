@@ -353,7 +353,8 @@ def routing_topk_kernel(
 
     # Simple implementation: find top-k values via serial scan
     # Initialize top-k trackers
-    top_vals = tl.full((TOP_K,), tl.finfo(tl.float32).min, dtype=tl.float32)
+    NEG_INF = -1e10
+    top_vals = tl.full((TOP_K,), NEG_INF, dtype=tl.float32)
     top_idxs = tl.zeros((TOP_K,), dtype=tl.int32)
 
     # Scalar loop over all experts
