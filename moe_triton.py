@@ -344,67 +344,81 @@ def routing_topk_kernel(
     if token >= T:
         return
 
+    # Load logits and bias, apply sigmoid
     offs_e = tl.arange(0, E)
     logits = tl.load(logits_ptr + token * E + offs_e)
-    bias   = tl.load(bias_ptr + offs_e)
-    sig    = 1.0 / (1.0 + tl.exp(-logits))
-    s_wb   = sig + bias
+    bias = tl.load(bias_ptr + offs_e)
+    s = 1.0 / (1.0 + tl.exp(-logits))  # sigmoid
+    s_wb = s + bias  # with bias
 
-    # Group scores: top1 per group of GROUP_SIZE experts
-    s_wb_2d = tl.reshape(s_wb, (N_GROUP, GROUP_SIZE))
-    group_scores = tl.max(s_wb_2d, axis=1)  # [N_GROUP=8]
+    # Step 1: Group scores (top-1 per group for simplicity in Triton)
+    group_scores = tl.zeros(N_GROUP, dtype=tl.float32)
+    for g in tl.static_range(N_GROUP):
+        for ge in tl.static_range(GROUP_SIZE):
+            e_idx = g * GROUP_SIZE + ge
+            group_scores[g] = tl.maximum(group_scores[g], s_wb[e_idx])
 
-    # Top-TOPK_GROUP groups by score (manual selection, no tensor slicing)
-    # Store top TOPK_GROUP indices
-    topk_group_idx = tl.zeros(TOPK_GROUP, dtype=tl.int32)
-    topk_group_val = tl.full(TOPK_GROUP, tl.finfo(tl.float32).min, dtype=tl.float32)
+    # Step 2: Find top-TOPK_GROUP groups (simple serial selection)
+    best_groups = tl.zeros(TOPK_GROUP, dtype=tl.int32)
+    best_scores = tl.full(TOPK_GROUP, tl.finfo(tl.float32).min, dtype=tl.float32)
 
     for g in tl.static_range(N_GROUP):
         score = group_scores[g]
-        # Check if this score is in top TOPK_GROUP
-        for k in tl.static_range(TOPK_GROUP):
-            if score > topk_group_val[k]:
-                # Shift and insert
-                for j in tl.static_range(TOPK_GROUP - 1, k, -1):
-                    topk_group_val[j] = topk_group_val[j - 1]
-                    topk_group_idx[j] = topk_group_idx[j - 1]
-                topk_group_val[k] = score
-                topk_group_idx[k] = g
+        # Bubble insertion: find position for this score
+        for pos in tl.static_range(TOPK_GROUP):
+            if score > best_scores[pos]:
+                # Shift right
+                for j in tl.static_range(TOPK_GROUP - 1, pos, -1):
+                    best_scores[j] = best_scores[j - 1]
+                    best_groups[j] = best_groups[j - 1]
+                # Insert
+                best_scores[pos] = score
+                best_groups[pos] = g
                 break
 
-    # Build group mask
+    # Step 3: Build mask for selected groups
     group_mask = tl.zeros(N_GROUP, dtype=tl.float32)
-    for k in tl.static_range(TOPK_GROUP):
-        group_mask[topk_group_idx[k]] = 1.0
+    for pos in tl.static_range(TOPK_GROUP):
+        group_mask[best_groups[pos]] = 1.0
 
-    # Expand to expert mask
-    score_mask = tl.zeros(E, dtype=tl.float32)
+    # Step 4: Mask logits to selected groups only
+    masked_logits = tl.full_like(s_wb, tl.finfo(tl.float32).min)
     for g in tl.static_range(N_GROUP):
         if group_mask[g] > 0:
-            for e in tl.static_range(GROUP_SIZE):
-                score_mask[g * GROUP_SIZE + e] = 1.0
+            for ge in tl.static_range(GROUP_SIZE):
+                e_idx = g * GROUP_SIZE + ge
+                masked_logits[e_idx] = s_wb[e_idx]
 
-    # Mask and select top-k experts
-    scores_pruned = tl.where(score_mask > 0, s_wb, tl.finfo(tl.float32).min)
+    # Step 5: Find top-TOP_K experts within masked logits
+    best_experts = tl.zeros(TOP_K, dtype=tl.int32)
+    best_vals = tl.full(TOP_K, tl.finfo(tl.float32).min, dtype=tl.float32)
 
-    # Get top TOP_K experts (simplified - just store indices)
-    topk_idx = tl.zeros(TOP_K, dtype=tl.int32)
-    topk_val = tl.full(TOP_K, tl.finfo(tl.float32).min, dtype=tl.float32)
-
-    for e in tl.static_range(E):
-        score = scores_pruned[e]
-        for k in tl.static_range(TOP_K):
-            if score > topk_val[k]:
-                for j in tl.static_range(TOP_K - 1, k, -1):
-                    topk_val[j] = topk_val[j - 1]
-                    topk_idx[j] = topk_idx[j - 1]
-                topk_val[k] = score
-                topk_idx[k] = e
+    for e_idx in tl.static_range(E):
+        val = masked_logits[e_idx]
+        # Bubble insertion
+        for pos in tl.static_range(TOP_K):
+            if val > best_vals[pos]:
+                for j in tl.static_range(TOP_K - 1, pos, -1):
+                    best_vals[j] = best_vals[j - 1]
+                    best_experts[j] = best_experts[j - 1]
+                best_vals[pos] = val
+                best_experts[pos] = e_idx
                 break
 
-    # Store results (simplified - just store first token's results)
-    for k in tl.static_range(TOP_K):
-        tl.store(topk_idx_ptr + token * TOP_K + k, topk_idx[k])
+    # Step 6: Normalize weights and store
+    # Use sigmoid values (s) without bias for weight computation
+    weight_sum = 0.0
+    for pos in tl.static_range(TOP_K):
+        e_idx = best_experts[pos]
+        weight_sum += s[e_idx]
+
+    for pos in tl.static_range(TOP_K):
+        e_idx = best_experts[pos]
+        norm_weight = s[e_idx] / (weight_sum + 1e-20)
+        scaled_weight = norm_weight * routed_scaling_factor
+
+        tl.store(topk_idx_ptr + token * TOP_K + pos, e_idx)
+        tl.store(topk_weights_ptr + token * TOP_K + pos, scaled_weight)
 
 
 @triton.jit
