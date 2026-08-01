@@ -352,15 +352,15 @@ def routing_topk_kernel(
     s_wb = s + bias  # with bias
 
     # Step 1: Group scores (top-1 per group for simplicity in Triton)
-    group_scores = tl.zeros(N_GROUP, dtype=tl.float32)
+    group_scores = tl.zeros((N_GROUP,), dtype=tl.float32)
     for g in tl.static_range(N_GROUP):
         for ge in tl.static_range(GROUP_SIZE):
             e_idx = g * GROUP_SIZE + ge
             group_scores[g] = tl.maximum(group_scores[g], s_wb[e_idx])
 
     # Step 2: Find top-TOPK_GROUP groups (simple serial selection)
-    best_groups = tl.zeros(TOPK_GROUP, dtype=tl.int32)
-    best_scores = tl.full(TOPK_GROUP, tl.finfo(tl.float32).min, dtype=tl.float32)
+    best_groups = tl.zeros((TOPK_GROUP,), dtype=tl.int32)
+    best_scores = tl.full((TOPK_GROUP,), tl.finfo(tl.float32).min, dtype=tl.float32)
 
     for g in tl.static_range(N_GROUP):
         score = group_scores[g]
@@ -377,7 +377,7 @@ def routing_topk_kernel(
                 break
 
     # Step 3: Build mask for selected groups
-    group_mask = tl.zeros(N_GROUP, dtype=tl.float32)
+    group_mask = tl.zeros((N_GROUP,), dtype=tl.float32)
     for pos in tl.static_range(TOPK_GROUP):
         group_mask[best_groups[pos]] = 1.0
 
@@ -390,8 +390,8 @@ def routing_topk_kernel(
                 masked_logits[e_idx] = s_wb[e_idx]
 
     # Step 5: Find top-TOP_K experts within masked logits
-    best_experts = tl.zeros(TOP_K, dtype=tl.int32)
-    best_vals = tl.full(TOP_K, tl.finfo(tl.float32).min, dtype=tl.float32)
+    best_experts = tl.zeros((TOP_K,), dtype=tl.int32)
+    best_vals = tl.full((TOP_K,), tl.finfo(tl.float32).min, dtype=tl.float32)
 
     for e_idx in tl.static_range(E):
         val = masked_logits[e_idx]
