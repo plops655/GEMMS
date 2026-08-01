@@ -42,7 +42,7 @@ results_volume = modal.Volume.from_name("moe-benchmark-results", create_if_missi
 
 @app.function(
     gpu="H100",
-    timeout=3600,
+    timeout=7200,  # 2 hours for ncu profiling
     volumes={"/results": results_volume},
 )
 def run_benchmark(repo_url: str = None):
@@ -159,19 +159,20 @@ config = BenchmarkConfig(
 {bench_func.__name__}(config)
 """)
 
-        # Run ncu (Nsight Compute)
+        # Run ncu (Nsight Compute) with lite profiling for speed
         output_file = results_dir / f"moe_triton_{bench_name}.ncu-rep"
         cmd = [
             "ncu",
-            "--set", "full",
+            "--set", "default",  # Lighter than 'full'
+            "--sample", "all",   # Sample all kernels
             "-o", str(output_file),
             "-f",
             "/usr/bin/python3",
             str(wrapper),
         ]
 
-        print(f"   Running: ncu --set full ...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        print(f"   Running: ncu --set default (this takes ~5-10 min per kernel)...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         if result.returncode == 0 and output_file.exists():
             size_mb = output_file.stat().st_size / (1024 * 1024)
             print(f"   ✓ {output_file.name} ({size_mb:.1f} MB)")
