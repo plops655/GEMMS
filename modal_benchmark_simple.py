@@ -25,9 +25,12 @@ from pathlib import Path
 
 image = (
     modal.Image
-    .from_registry("nvcr.io/nvidia/hpc-toolkit:latest")
+    .from_registry("nvcr.io/nvidia/pytorch:24.07-py3")
+    .run_commands(
+        "apt-get update && apt-get install -y nvidia-nsight-systems-cli-remote || echo 'nsys install skipped'",
+        "apt-get install -y nvidia-nsight-compute-cli || echo 'ncu install attempted'",
+    )
     .pip_install(
-        "torch",
         "triton>=2.1.0",
     )
 )
