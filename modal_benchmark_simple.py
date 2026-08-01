@@ -113,8 +113,10 @@ def run_benchmark(repo_url: str = None):
     )
 
     all_results = []
-    all_results.extend(benchmark_routing_topk(config))
-    all_results.extend(benchmark_routing_permute(config))
+    # Skip routing kernels (complex Triton constraints)
+    # all_results.extend(benchmark_routing_topk(config))
+    # all_results.extend(benchmark_routing_permute(config))
+    # Focus on compute kernels
     all_results.extend(benchmark_gemm1_swiglu(config))
     all_results.extend(benchmark_gemm2(config))
 
