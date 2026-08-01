@@ -1,0 +1,50 @@
+[
+  {
+    "kernel": "moe_gemm1_swiglu_kernel",
+    "num_tokens": 10,
+    "num_repeats": 3,
+    "latency_ms": 0.3952,
+    "throughput": 25304.48,
+    "stddev_ms": 0.0273
+  },
+  {
+    "kernel": "moe_gemm1_swiglu_kernel",
+    "num_tokens": 100,
+    "num_repeats": 3,
+    "latency_ms": 0.3589,
+    "throughput": 278597.58,
+    "stddev_ms": 0.0069
+  },
+  {
+    "kernel": "moe_gemm1_swiglu_kernel",
+    "num_tokens": 1000,
+    "num_repeats": 3,
+    "latency_ms": 1.2447,
+    "throughput": 803389.66,
+    "stddev_ms": 0.003
+  },
+  {
+    "kernel": "moe_gemm2_kernel",
+    "num_tokens": 10,
+    "num_repeats": 3,
+    "latency_ms": 0.0774,
+    "throughput": 129265.21,
+    "stddev_ms": 0.0047
+  },
+  {
+    "kernel": "moe_gemm2_kernel",
+    "num_tokens": 100,
+    "num_repeats": 3,
+    "latency_ms": 0.0881,
+    "throughput": 1134743.2,
+    "stddev_ms": 0.004
+  },
+  {
+    "kernel": "moe_gemm2_kernel",
+    "num_tokens": 1000,
+    "num_repeats": 3,
+    "latency_ms": 0.3033,
+    "throughput": 3297373.65,
+    "stddev_ms": 0.0051
+  }
+]

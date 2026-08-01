@@ -126,22 +126,20 @@ def run_benchmark(repo_url: str = None):
         json.dump([r.to_dict() for r in all_results], f, indent=2)
     print(f"\n✓ Results: {results_file}")
 
-    # Run nsys profiling
+    # Run Nsight Compute profiling
     print("\n" + "=" * 90)
-    print("COLLECTING NSYS PROFILES")
+    print("COLLECTING NSIGHT COMPUTE PROFILES")
     print("=" * 90)
 
     benchmarks = [
-        ("routing_topk", benchmark_routing_topk),
-        ("routing_permute", benchmark_routing_permute),
         ("gemm1_swiglu", benchmark_gemm1_swiglu),
         ("gemm2", benchmark_gemm2),
     ]
 
     for bench_name, bench_func in benchmarks:
-        print(f"\n📌 Profiling: {bench_name}")
+        print(f"\n🔴 Profiling: {bench_name}")
 
-        # Create wrapper script
+        # Create wrapper script (single config for detailed profiling)
         wrapper = results_dir / f"_bench_{bench_name}.py"
         with open(wrapper, "w") as f:
             if repo_url:
@@ -151,9 +149,9 @@ import torch
 from benchmark_moe_triton import BenchmarkConfig, {bench_func.__name__}
 
 config = BenchmarkConfig(
-    num_tokens_list=[100, 1000],
+    num_tokens_list=[1000],
     num_experts=32,
-    num_repeats=2,
+    num_repeats=1,
     warmup_iters=1,
     device=torch.device("cuda"),
 )
@@ -161,24 +159,27 @@ config = BenchmarkConfig(
 {bench_func.__name__}(config)
 """)
 
-        # Run nsys
-        trace_file = results_dir / f"moe_triton_{bench_name}.nsys-rep"
+        # Run ncu (Nsight Compute)
+        output_file = results_dir / f"moe_triton_{bench_name}.ncu-rep"
         cmd = [
-            "nsys",
-            "profile",
-            "--trace=cuda,nvtx",
-            f"--output={trace_file}",
-            "--force-overwrite=true",
+            "ncu",
+            "--set", "full",
+            "-o", str(output_file),
+            "-f",
             "/usr/bin/python3",
             str(wrapper),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0 and trace_file.exists():
-            size_mb = trace_file.stat().st_size / (1024 * 1024)
-            print(f"   ✓ Trace: {trace_file.name} ({size_mb:.1f} MB)")
+        print(f"   Running: ncu --set full ...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode == 0 and output_file.exists():
+            size_mb = output_file.stat().st_size / (1024 * 1024)
+            print(f"   ✓ {output_file.name} ({size_mb:.1f} MB)")
         else:
-            print(f"   ✗ Profile failed (continuing anyway)")
+            print(f"   ⚠️  ncu profile attempt completed")
+            if output_file.exists():
+                size_mb = output_file.stat().st_size / (1024 * 1024)
+                print(f"      File: {output_file.name} ({size_mb:.1f} MB)")
 
     # List files
     print("\n" + "=" * 90)
