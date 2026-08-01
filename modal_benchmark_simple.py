@@ -25,9 +25,9 @@ from pathlib import Path
 
 image = (
     modal.Image
-    .from_registry("nvcr.io/nvidia/pytorch:24.07-py3")
-    .apt_install("nsight-compute")
+    .from_registry("nvcr.io/nvidia/hpc-toolkit:latest")
     .pip_install(
+        "torch",
         "triton>=2.1.0",
     )
 )
@@ -178,7 +178,9 @@ config = BenchmarkConfig(
             size_mb = output_file.stat().st_size / (1024 * 1024)
             print(f"   ✓ {output_file.name} ({size_mb:.1f} MB)")
         else:
-            print(f"   ⚠️  ncu profile attempt completed")
+            print(f"   ⚠️  ncu profile attempt completed (return code: {result.returncode})")
+            if result.stderr:
+                print(f"      Error: {result.stderr[:200]}")
             if output_file.exists():
                 size_mb = output_file.stat().st_size / (1024 * 1024)
                 print(f"      File: {output_file.name} ({size_mb:.1f} MB)")
