@@ -161,7 +161,7 @@ def moe_gemm1_swiglu_kernel(
         mask_a = mask_m[:, None] & ((k_start + offs_k)[None, :] < H)
         # Load as FP8 directly — Triton's F32DotTC pass promotes to BF16/FP32
         # internally when emitting the tensor core instruction.
-        a = tl.load(a_ptrs, mask=mask_a, other=0.0).to(tl.float8e4nv)
+        a = tl.load(a_ptrs, mask=mask_a, other=0.0).to(tl.float16)
 
         # ── Load B tiles: contiguous [BLOCK_K, BLOCK_N] weight slices ─────────
         # B is transposed relative to A: weight layout is [N, H] (N rows, H cols).
@@ -173,8 +173,8 @@ def moe_gemm1_swiglu_kernel(
                     + offs_n[:, None] * H
                     + (k_start + offs_k)[None, :])
         mask_b = (offs_n[:, None] < N) & ((k_start + offs_k)[None, :] < H)
-        b_gate = tl.load(b_ptrs_g, mask=mask_b, other=0.0).to(tl.float8e4nv)
-        b_up   = tl.load(b_ptrs_u, mask=mask_b, other=0.0).to(tl.float8e4nv)
+        b_gate = tl.load(b_ptrs_g, mask=mask_b, other=0.0).to(tl.float16)
+        b_up   = tl.load(b_ptrs_u, mask=mask_b, other=0.0).to(tl.float16)
 
         # ── FP8 block-quantization scales ────────────────────────────────────
         # Hidden scale: one float per (K-block, token). Shape [NUM_H_BLOCKS, T].
@@ -297,7 +297,7 @@ def moe_gemm2_kernel(
         # B: FP8 weight [H_DIM, I_DIM], load [BLOCK_N, BLOCK_K] slice
         b_ptrs  = w2_ptr + offs_n[:, None] * I + (k_start + offs_k)[None, :]
         mask_b  = (offs_n[:, None] < H) & ((k_start + offs_k)[None, :] < I)
-        b       = tl.load(b_ptrs, mask=mask_b, other=0.0).to(tl.float8e4nv)
+        b       = tl.load(b_ptrs, mask=mask_b, other=0.0).to(tl.float16)
 
         a_sc   = tl.load(inter_scale_ptr + k * (I // BLOCK_K) + token_ids,
                          mask=mask_m, other=1.0)

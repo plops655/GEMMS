@@ -86,9 +86,9 @@ def create_routing_inputs(T, device):
 
 def create_gemm1_inputs(Tk, E_local, device):
     """Create inputs for GEMM1 kernel"""
-    hidden = torch.randn(Tk, H_DIM, dtype=torch.float8_e4nv, device=device)
-    w_gate = torch.randn(E_local, I_DIM * 2, H_DIM, dtype=torch.float8_e4nv, device=device)
-    w_up = torch.randn(E_local, I_DIM * 2, H_DIM, dtype=torch.float8_e4nv, device=device)
+    hidden = torch.randn(Tk, H_DIM, dtype=torch.float16, device=device)
+    w_gate = torch.randn(E_local, I_DIM * 2, H_DIM, dtype=torch.float16, device=device)
+    w_up = torch.randn(E_local, I_DIM * 2, H_DIM, dtype=torch.float16, device=device)
     sorted_ids = torch.arange(Tk, dtype=torch.int32, device=device)
 
     intermediate = torch.empty(Tk, I_DIM, dtype=torch.bfloat16, device=device)
@@ -111,7 +111,7 @@ def create_gemm1_inputs(Tk, E_local, device):
 def create_gemm2_inputs(Tk, E_local, device):
     """Create inputs for GEMM2 kernel"""
     inter = torch.randn(Tk, I_DIM, dtype=torch.bfloat16, device=device)
-    w2 = torch.randn(E_local, H_DIM, I_DIM, dtype=torch.float8_e4nv, device=device)
+    w2 = torch.randn(E_local, H_DIM, I_DIM, dtype=torch.float16, device=device)
     sorted_ids = torch.arange(Tk, dtype=torch.int32, device=device)
 
     topk_weights = torch.ones(Tk, TOP_K, dtype=torch.float32, device=device) / TOP_K
