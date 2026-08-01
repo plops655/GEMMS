@@ -26,6 +26,7 @@ from pathlib import Path
 image = (
     modal.Image
     .from_registry("nvcr.io/nvidia/pytorch:24.07-py3")
+    .apt_install("nsight-compute")
     .pip_install(
         "triton>=2.1.0",
     )
