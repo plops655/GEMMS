@@ -351,14 +351,33 @@ def routing_topk_kernel(
     s = 1.0 / (1.0 + tl.exp(-logits))  # sigmoid
     s_wb = s + bias  # with bias
 
-    # Simple top-k selection using argsort (Triton native)
-    # argsort returns indices sorted by values
-    sorted_idx = tl.argsort(s_wb, descending=True)  # [E]
+    # Simple implementation: find top-k values via serial scan
+    # Initialize top-k trackers
+    top_vals = tl.full((TOP_K,), tl.finfo(tl.float32).min, dtype=tl.float32)
+    top_idxs = tl.zeros((TOP_K,), dtype=tl.int32)
 
-    # Take first TOP_K indices
+    # Scalar loop over all experts
+    for e in tl.static_range(E):
+        val = s_wb[e]
+        # Simple insertion: find if val is in top-k
+        for k in tl.static_range(TOP_K):
+            if val > top_vals[k]:
+                # Shift and insert
+                for j in tl.static_range(TOP_K - 1, k, -1):
+                    top_vals[j] = top_vals[j - 1]
+                    top_idxs[j] = top_idxs[j - 1]
+                top_vals[k] = val
+                top_idxs[k] = e
+                break
+
+    # Compute weights and store
+    weight_sum = 0.0
     for k in tl.static_range(TOP_K):
-        expert_idx = sorted_idx[k]
-        weight = s[expert_idx] / (tl.sum(s[:TOP_K]) + 1e-20)
+        weight_sum += s[top_idxs[k]]
+
+    for k in tl.static_range(TOP_K):
+        expert_idx = top_idxs[k]
+        weight = s[expert_idx] / (weight_sum + 1e-20)
         scaled_weight = weight * routed_scaling_factor
 
         tl.store(topk_idx_ptr + token * TOP_K + k, expert_idx)
